@@ -1,9 +1,0 @@
-"RAM_Size":{"value":1024,"unit":"KB"},
-"Page_Size":{"value":4,"unit":"KB"},
-"TLB_Size":{"value":16,"unit":"KB"},
-"Latency":
-{
-"TLB":{"value":1,"unit":"ns"},
-"RAM":{"value":100,"unit":"ns"},
-"Disk":{"value":10000000,"unit":"ns"}
-}
