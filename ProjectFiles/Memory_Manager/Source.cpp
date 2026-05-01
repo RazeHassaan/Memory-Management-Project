@@ -32,13 +32,18 @@ struct PAGE
 { 
 	static const int pageSize=10;
 	int data[pageSize];
-	int DirtyBit; int ValidBit;
+	int processNum; int pageNum;
 	
-	PAGE() :DirtyBit(0),ValidBit(0) {};
+	PAGE() :processNum(-1), pageNum(-1) {};
 
 	void UpdateValueAtOffset(int newVal, int offset)
 	{
-		data[offset] = newVal; DirtyBit = 1;
+		data[offset] = newVal; 
+	}
+
+	void IndexPage(int pNum,int pgNum)
+	{
+		processNum = pNum; pageNum = pgNum;
 	}
 
 	int PopulatePage(int start)
@@ -74,11 +79,12 @@ public:
 	  pages = new PAGE[totalPages];
 	  int j = 0;
 
-	  //Initialize its pages with continuous Counting
+	  //Initialize its pages with indexes and data as continuous Counting
 	  for (int i = 0; i < totalPages; i++)
 	  {
 		  j=pages[i].PopulatePage(j);
 		  //cout << j << endl;
+		  pages[i].IndexPage(processNum, i);
 	  }
 	}
 
@@ -92,6 +98,13 @@ public:
 		pg = pages[pageNum];
 		return pg;
 	}
+
+	//To update a page
+	void UpdatePage(int pgNum, PAGE& pg)
+	{
+		pages[pgNum] = pg;
+	}
+
 
 	int totalPgNum() { return totalPages;}
 
@@ -131,6 +144,12 @@ public:
 	void UpdateFrame(int PageNum,int frameNum)
 	{
 		PTable[PageNum].FrameNum=frameNum;
+	}
+
+	//to access a page to mark it dirty
+	void MarkDirty(int pageNum)
+	{
+		PTable[pageNum].DirtyBit = 1;
 	}
 
 	PTableEntry AccessEntry(int PageNum)
@@ -209,9 +228,22 @@ public:
 		}
 	}
 
-	void WriteBack()
+	void WriteBack(int pNum,int pgNum, PAGE& pg)
 	{
 		//if a page is written back to Disk
+		switch (pNum)
+		{
+		case 1:
+		{ BackingStore["Process1"].UpdatePage(pgNum, pg); }
+		case 2:
+		{ BackingStore["Process2"].UpdatePage(pgNum, pg); }
+		case 3:
+		{ BackingStore["Process3"].UpdatePage(pgNum, pg); }
+		case 4:
+		{ BackingStore["Process4s"].UpdatePage(pgNum, pg); }
+		default:
+		{ cout << "Required Process not exists in Disk\n"; }
+		}
 	}
 
 };
@@ -227,6 +259,8 @@ class PhysicalMemory
 	int freeFrames;
 	int nextFreeFrame;   //Tells the next empty slot in RAM frames
 	TLB& fastMem;
+	queue<VirtualAddr> FIFO_queue;   //queue to be used in FIFO Replacement algorithm
+	VirtualAddr newVPN;
 
 public:
 	//Constructor
@@ -255,7 +289,11 @@ public:
 			for (int pgNum = 0; pgNum < 5; pgNum++)
 			{
 				pg = store.ReadPage(ProcessNum, pgNum);
-				frames[nextFreeFrame] = pg; freeFrames--;
+				frames[nextFreeFrame] = pg; 
+				newVPN.setPNum(ProcessNum);
+				newVPN.setPgNum(pgNum);
+				FIFO_queue.push(newVPN);
+				freeFrames--;
 				Tables[ProcessNum].ValidatePage(pgNum,1);
 				Tables[ProcessNum].UpdateFrame(pgNum, nextFreeFrame);
 				nextFreeFrame++;
@@ -333,7 +371,11 @@ public:
 		int reqFrmNum;
 		int requiredFrame;
 		PTableEntry ptEntry;
-		PAGE requiredPage;
+		PAGE requiredPage;     //Page to be inserted in RAM
+		PAGE target;           //Page to be removed from RAM by replacement algo
+		PAGE previousPage;     //Page previously at that frame before replacement
+
+
 		//Access the required process's Page Table's required page entry
 		ptEntry=Tables[pNum - 1].AccessEntry(pgNum);
 		if (ptEntry.validBit==0)  //If page Table does not have frame number => Page is missing in RAM
@@ -344,6 +386,9 @@ public:
 			if (Is_RAMEmpty() == true)  //If there is free space in RAM
 			{
 				frames[nextFreeFrame] = requiredPage;
+				newVPN.setPNum(pNum);
+				newVPN.setPgNum(pgNum);
+				FIFO_queue.push(newVPN);
 				//Update its value in page table and mark its VALID BIT=1;
 				Tables[pNum].UpdateFrame(pgNum, nextFreeFrame);
 				Tables[pNum].ValidatePage(pgNum, 1);
@@ -351,7 +396,27 @@ public:
 			}
 			else     //Means RAM is full
 			{
-				//---------------->APPLY REPLACEMENT ALGORITHM<---------------------------------
+				//---------------->FIFO REPLACEMENT ALGORITHM<---------------------------------
+				newVPN = FIFO_queue.front();
+				FIFO_queue.pop();
+				//since all RAM is full, so we'll traverse all RAM (i<size) to find target page
+				for (int i = 0; i < size; i++)
+				{
+					target = frames[i];
+					if ((target.processNum == newVPN.processNum) && (target.pageNum == newVPN.pageNum))
+					{
+						previousPage = frames[i];
+						frames[i] = requiredPage;
+						//update Page Table
+						Tables[pNum].UpdateFrame(pgNum,i);
+						//Write back to DISK the page to be replaced if it is dirty
+						if (Tables[pNum].AccessEntry(pgNum).DirtyBit == 1)
+						{
+							//Write back to DISK
+							store.WriteBack(newVPN.processNum,newVPN.pageNum,previousPage);
+						}
+					}
+				}
 			}
 		}
 		else              //Page Table has the frame Number of desired Page => Page is in RAM
@@ -371,10 +436,12 @@ public:
 	}
 
 	//Directly Accessing the RAM frames for WRITE when you have frame Number/Index
-	void DirectAccessFrameForWrite(int frmNum, int newVal,int pgOffset)
+	void DirectAccessFrameForWrite(int frmNum,int pNum,int pgNum, int newVal,int pgOffset)
 	{
 		//Updates the required part of specified Page 
 		frames[frmNum].UpdateValueAtOffset(newVal,pgOffset);
+		//Now mark it dirty in page table
+		Tables[pNum].MarkDirty(pgNum);
 	}
 };
 
@@ -428,12 +495,6 @@ public:
 		return FrameNumber;
 	}
 	
-	//Deletes the specified entry from TLB
-	void TLB_DeleteEntry(VirtualAddr VPN)
-	{
-		
-		
-	}
 
 	//Updates TLB
 	//Only called by RAM and given desired parameters when TLB does not have req. page frame numbers
@@ -518,12 +579,12 @@ public:
 			//Get the desired Frame Number from Page Table
 			frame = RAM.AccessPTablePG(processNum, pageNum);
 			//Now access the RAM to access the page for WRITE
-			RAM.DirectAccessFrameForWrite(frame, newData, pgOffset);  //Updated the page
+			RAM.DirectAccessFrameForWrite(frame, processNum,pageNum, newData, pgOffset);  //Updated the page
 		}
 		else                //If TLB has the desired Page
 		{
 			//directly access RAM because you have the frame Number of Page
-			RAM.DirectAccessFrameForWrite(frame, newData, pgOffset);  //Updated the page
+			RAM.DirectAccessFrameForWrite(frame, processNum, pageNum, newData, pgOffset);  //Updated the page
 		}
 	}
 };
