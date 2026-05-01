@@ -1,8 +1,0 @@
-﻿  Source.cpp
-F:\CE-46 4th Semester\OPERATING SYSTEMS\OS Project\Memory_Manager\Memory_Manager\Source.cpp(18,34): error C3861: 'pageNum': identifier not found
-      F:\CE-46 4th Semester\OPERATING SYSTEMS\OS Project\Memory_Manager\Memory_Manager\Source.cpp(18,34):
-      the template instantiation context (the oldest one first) is
-          F:\CE-46 4th Semester\OPERATING SYSTEMS\OS Project\Memory_Manager\Memory_Manager\Source.cpp(12,7):
-          while compiling class template 'PROCESS'
-  
-F:\CE-46 4th Semester\OPERATING SYSTEMS\OS Project\Memory_Manager\Memory_Manager\Source.cpp(18,34): error C2065: 'pageNum': undeclared identifier
