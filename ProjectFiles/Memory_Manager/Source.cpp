@@ -1,5 +1,6 @@
 #include<iostream>
 #include<unordered_map>
+#include<queue>
 using namespace std;
 
  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -13,6 +14,16 @@ struct PTableEntry
 	int processNum;
 	PTableEntry(int Vbit = 0, int Dbit = 0, int FNum = -1,int pNum=-1,int pgNum=-1) :
 		validBit(Vbit), DirtyBit(Dbit), FrameNum(FNum),processNum(pNum),pageNum(pgNum) {};
+};
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+struct VirtualAddr
+{
+	int processNum;
+	int pageNum;
+	VirtualAddr(int pNum=-1,int pgNum=-1):processNum(pNum),pageNum(pgNum){}
+	void setPNum(int pNum) { processNum = pNum; }
+	void setPgNum(int pgNum) { pageNum = pgNum; }
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -203,12 +214,6 @@ public:
 		//if a page is written back to Disk
 	}
 
-	void MakeDirty()
-	{
-		//To make the desired pg
-	}
-
-
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -381,6 +386,8 @@ class TLB
 	int TLBSize;
 	PhysicalMemory& RAM;
 	int nextIndex=0;   //Index to the next free entry
+	queue<VirtualAddr> VPN_Track;
+	VirtualAddr newVPN;
 
 public:
 	TLB(int size, PhysicalMemory& mem) :TLBSize(size),RAM(mem)
@@ -396,6 +403,9 @@ public:
 			for(PTableEntry pt:fromRAM)
 			{
 				quickTable[nextIndex] = pt;
+				newVPN.setPNum(pt.processNum);
+				newVPN.setPgNum(pt.pageNum);
+				VPN_Track.push(newVPN);
 				nextIndex++;
 			}
 	    }
@@ -418,18 +428,40 @@ public:
 		return FrameNumber;
 	}
 	
+	//Deletes the specified entry from TLB
+	void TLB_DeleteEntry(VirtualAddr VPN)
+	{
+		
+		
+	}
+
 	//Updates TLB
 	//Only called by RAM and given desired parameters when TLB does not have req. page frame numbers
 	void UpdateTLB(int pNum,int pgNum,int FrmNum)
 	{
 		PTableEntry newEntry{1,0,FrmNum,pNum,pgNum};
+		PTableEntry target;
 		if (Is_TLBEmpty() == true)   //Means TLB has some empty space
 		{
 			quickTable[nextIndex] = newEntry;
+			newVPN.setPNum(newEntry.processNum);
+			newVPN.setPgNum(newEntry.pageNum);
+			VPN_Track.push(newVPN);
 	    }
 		else                        //Means TLB is full
 		{
-			     //---------------->APPLY REPLACEMENT ALGORITHM<---------------------------------
+			     //---------------->FIFO REPLACEMENT ALGORITHM<---------------------------------
+			newVPN = VPN_Track.front();
+			VPN_Track.pop();
+			//Now we'll find that PTableEntry and replace it with new PTableEntry
+			for (int i = 0; i < TLBSize; i++)
+			{
+				target = quickTable[i];
+				if ((target.processNum == newVPN.processNum) && (target.pageNum == newVPN.pageNum))
+				{
+					quickTable[i] = newEntry;
+				}
+			}			
 		}
 	}
 };
