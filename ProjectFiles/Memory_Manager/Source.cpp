@@ -1,9 +1,21 @@
 #include<iostream>
 #include<unordered_map>
 #include<queue>
+#include<fstream>
+#include<iomanip>
+#include <cstdlib>   // rand, srand
+#include<sstream>
+#include<direct.h>   // for _getcwd
+#include"json.hpp"
+
+using json = nlohmann::json;   // alias
+
 using namespace std;
 
- /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+ /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 
 struct PTableEntry
 {
@@ -16,17 +28,23 @@ struct PTableEntry
 		validBit(Vbit), DirtyBit(Dbit), FrameNum(FNum),processNum(pNum),pageNum(pgNum) {};
 };
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+   /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
 struct VirtualAddr
 {
 	int processNum;
 	int pageNum;
+	int pageOffset;
 	VirtualAddr(int pNum=-1,int pgNum=-1):processNum(pNum),pageNum(pgNum){}
 	void setPNum(int pNum) { processNum = pNum; }
 	void setPgNum(int pgNum) { pageNum = pgNum; }
 };
+   /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 struct PAGE
 { 
@@ -41,17 +59,20 @@ struct PAGE
 		data[offset] = newVal; 
 	}
 
+	int AccessValueAtOffset(int offset)
+	{
+		return data[offset];
+	}
+
 	void IndexPage(int pNum,int pgNum)
 	{
 		processNum = pNum; pageNum = pgNum;
 	}
 
-	int PopulatePage(int start)
+	void PopulatePage()
 	{
-		int begin = start;
-		for(int i=0;i<pageSize;i++,begin++)
-		{ data[i] = begin;}
-		return begin ;
+		for(int i=0;i<pageSize;i++)
+		{ data[i] = (rand()%100)+1;}
 	}
 
 	void PrintPage()
@@ -62,7 +83,9 @@ struct PAGE
 	}
 };
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    ///////////////////////////////////////////////////////////////////////       PROCESS      ////////////////////////////////////////////////////////////////////
+   //////////////////////////////////////////////////////////////////////         PROCESS     //////////////////////////////////////////////////////////////////////////
 
 class PROCESS
 {
@@ -73,7 +96,7 @@ class PROCESS
 	int processNum;
 public:
 	//Constructor and Pages Builder
-	PROCESS(int pSize=0,int index):processSize(pSize),processNum(index)
+	PROCESS(int pSize=0,int index=-1):processSize(pSize),processNum(index)
 	{ 
 	  totalPages = pSize / pageSize;
 	  pages = new PAGE[totalPages];
@@ -82,7 +105,7 @@ public:
 	  //Initialize its pages with indexes and data as continuous Counting
 	  for (int i = 0; i < totalPages; i++)
 	  {
-		  j=pages[i].PopulatePage(j);
+		  pages[i].PopulatePage();
 		  //cout << j << endl;
 		  pages[i].IndexPage(processNum, i);
 	  }
@@ -99,14 +122,16 @@ public:
 		return pg;
 	}
 
+	//Returns total pages in the process
+	int totalPgNum() { return totalPages; }
+
+
 	//To update a page
 	void UpdatePage(int pgNum, PAGE& pg)
 	{
 		pages[pgNum] = pg;
 	}
 
-
-	int totalPgNum() { return totalPages;}
 
 	void PrintPages()
 	{
@@ -117,7 +142,10 @@ public:
 	}
 };
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+ ///////////////////////////////////////////////////////////////////////       PAGE TABLE      ////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////       PAGE TABLE      ////////////////////////////////////////////////////////////////////////
+
 
 class PageTable
 {
@@ -160,13 +188,103 @@ public:
 	int getSize() { return entries; }
 };
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// 1. Forward Declarations
+class PhysicalMemory;
+
+    //////////////////////////////////////////////////////////////////////////       TLB CACHE       ////////////////////////////////////////////////////////////////////
+   //////////////////////////////////////////////////////////////////////////       TLB CACHE      ////////////////////////////////////////////////////////////////////
+
+
+class TLB
+{
+	PTableEntry* quickTable;
+	int TLBSize;
+	int nextIndex = 0;   //Index to the next free entry
+	queue<VirtualAddr> VPN_Track;
+	VirtualAddr newVPN;
+
+public:
+	TLB(int size) :TLBSize(size)
+	{
+		quickTable = new PTableEntry[TLBSize];
+	}
+
+
+	//Check whether TLB is empty
+	bool Is_TLBEmpty() { return nextIndex < TLBSize; }
+
+	int AccessPage(int pNum, int pgNum)
+	{
+		int FrameNumber = -1;
+		for (int i = 0; i < TLBSize; i++)
+		{
+			if (quickTable[i].processNum == pNum)
+			{
+				if (quickTable[i].pageNum == pgNum)
+				{
+					FrameNumber = quickTable[i].FrameNum;
+				}
+			}
+		}
+		return FrameNumber;
+	}
+
+
+	//Updates TLB
+	//Only called by RAM and given desired parameters when TLB does not have req. page frame numbers
+	void UpdateTLB(int pNum, int pgNum, int FrmNum)
+	{
+		PTableEntry newEntry{ 1,0,FrmNum,pNum,pgNum };
+		PTableEntry target;
+		if (Is_TLBEmpty())  //Means TLB has some space
+		{
+			AddEntrytoTLB(newEntry);  //Reuse code Enhancement
+		}
+		else                //Means TLB has no space
+		{
+			//---------------->FIFO REPLACEMENT ALGORITHM<---------------------------------
+			newVPN = VPN_Track.front();
+			VPN_Track.pop();
+			//Now we'll find that PTableEntry and replace it with new PTableEntry
+			for (int i = 0; i < TLBSize; i++)
+			{
+				target = quickTable[i];
+				if ((target.processNum == newVPN.processNum) && (target.pageNum == newVPN.pageNum))
+				{
+					quickTable[i] = newEntry;
+				}
+			}
+
+			// record new mapping  //This was missing
+			VirtualAddr v; v.setPNum(pNum); v.setPgNum(pgNum);
+			VPN_Track.push(v);
+		}
+	}
+
+	void AddEntrytoTLB(PTableEntry entry)
+	{
+		if (nextIndex >= TLBSize) return; // defensive
+		quickTable[nextIndex] = entry;
+		// Keep VPN_Track in sync:
+		VirtualAddr v;
+		v.setPNum(entry.processNum);
+		v.setPgNum(entry.pageNum);
+		VPN_Track.push(v);
+		nextIndex++;
+	}
+
+};
+ ///////////////////////////////////////////////////////////////////////       HARD DISK ROM      ////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////       HARD DISK ROM      ///////////////////////////////////////////////////////////////////////
+
 
 class DISK
 {
 	int dirtybit, validityBit;
 	int totalReads; int totalWrites;
 	int latency;
+	vector<int> pIndexes;
 	PROCESS p1{40,1};
 	PROCESS p2{80,2};
 	PROCESS p3{120,3};
@@ -189,6 +307,10 @@ public:
 		Tables.push_back(PT2);
 		Tables.push_back(PT3);
 		Tables.push_back(PT4);
+		pIndexes.push_back(1);
+		pIndexes.push_back(2);
+		pIndexes.push_back(3);
+		pIndexes.push_back(4);
 	}
 
 	PAGE ReadPage(int ProcessNum,int pgNum)
@@ -197,17 +319,36 @@ public:
 		switch (ProcessNum)
 		{
 		 case 1:
-		 { pg= BackingStore["Process1"].AccessPage(pgNum);}
+		 { pg = BackingStore["Process1"].AccessPage(pgNum); break; }
 		 case 2:
-		 { pg = BackingStore["Process2"].AccessPage(pgNum); }
+		 { pg = BackingStore["Process2"].AccessPage(pgNum); break; }
 		 case 3:
-		 { pg = BackingStore["Process3"].AccessPage(pgNum); }
+		 { pg = BackingStore["Process3"].AccessPage(pgNum); break; }
 		 case 4:
-		 { pg = BackingStore["Process4"].AccessPage(pgNum); }
+		 { pg = BackingStore["Process4"].AccessPage(pgNum); break; }
 		 default:
-		 { cout << "Process not exists\n"; }
+		 { cout << "Process not exists; Process Number was "<<ProcessNum<<"\n"; }
 	    }
 		return pg;
+	}
+
+	PROCESS accessProcess(int ProcessNum)
+	{
+		PROCESS p;
+		switch (ProcessNum)
+		{
+		case 1:
+		{ p = BackingStore["Process1"]; break; }
+		case 2:
+		{ p = BackingStore["Process2"]; break; }
+		case 3:
+		{ p = BackingStore["Process3"]; break; }
+		case 4:
+		{ p = BackingStore["Process4"]; break; }
+		default:
+		{ cout << "Process not exists\n"; break; }
+		}
+		return p;
 	}
 
 	PageTable accessTable(int tableNum)
@@ -216,13 +357,13 @@ public:
 		switch (tableNum)
 		{
 		case 1:
-		{ PageTable pt = Tables[0]; }
+		{ PageTable pt = Tables[0]; return pt; }
 		case 2:
-		{ PageTable pt = Tables[1]; }
+		{ PageTable pt = Tables[1]; return pt; }
 		case 3:
-		{ PageTable pt = Tables[2]; }
+		{ PageTable pt = Tables[2]; return pt; }
 		case 4:
-		{ PageTable pt = Tables[3]; }
+		{ PageTable pt = Tables[3]; return pt; }
 		default:
 		{ cout << "Required Table not exists\n"; }
 		}
@@ -234,21 +375,23 @@ public:
 		switch (pNum)
 		{
 		case 1:
-		{ BackingStore["Process1"].UpdatePage(pgNum, pg); }
+		{ BackingStore["Process1"].UpdatePage(pgNum, pg); break; }
 		case 2:
-		{ BackingStore["Process2"].UpdatePage(pgNum, pg); }
+		{ BackingStore["Process2"].UpdatePage(pgNum, pg); break; }
 		case 3:
-		{ BackingStore["Process3"].UpdatePage(pgNum, pg); }
+		{ BackingStore["Process3"].UpdatePage(pgNum, pg); break; }
 		case 4:
-		{ BackingStore["Process4s"].UpdatePage(pgNum, pg); }
+		{ BackingStore["Process4s"].UpdatePage(pgNum, pg); break; }
 		default:
-		{ cout << "Required Process not exists in Disk\n"; }
+		{ cout << "Required Process not exists in Disk\n"; break; }
 		}
 	}
 
+	vector<int> getPIndexes() { return pIndexes; }
 };
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////////////////       MEMORY RAM       ////////////////////////////////////////////////////////////////////
+   ///////////////////////////////////////////////////////////////////////       MEMORY RAM       ////////////////////////////////////////////////////////////////////
 
 class PhysicalMemory
 {
@@ -261,6 +404,7 @@ class PhysicalMemory
 	TLB& fastMem;
 	queue<VirtualAddr> FIFO_queue;   //queue to be used in FIFO Replacement algorithm
 	VirtualAddr newVPN;
+	vector<int> pIndexes;
 
 public:
 	//Constructor
@@ -269,6 +413,11 @@ public:
 		frames = new PAGE[size];
 		InitializeTables();
 		InitializePages();
+		pIndexes = store.getPIndexes();
+		for (int index : pIndexes)
+		{
+			InitializeTLB(index);
+		}
 	}
 
 	void InitializeTables()
@@ -294,8 +443,8 @@ public:
 				newVPN.setPgNum(pgNum);
 				FIFO_queue.push(newVPN);
 				freeFrames--;
-				Tables[ProcessNum].ValidatePage(pgNum,1);
-				Tables[ProcessNum].UpdateFrame(pgNum, nextFreeFrame);
+				Tables[ProcessNum-1].ValidatePage(pgNum,1);
+				Tables[ProcessNum-1].UpdateFrame(pgNum, nextFreeFrame);
 				nextFreeFrame++;
 			}
 		}
@@ -303,9 +452,8 @@ public:
 	
 
 	//Loads Pages to TLB Initially
-	vector<PTableEntry> InitializeTLB(int ProcessNum)
+	void InitializeTLB(int ProcessNum)
 	{
-	  vector<PTableEntry> toTLB;
 	  int SendCount = 0;
 	  switch(ProcessNum)
 	  {
@@ -317,7 +465,7 @@ public:
 				if(pt.AccessEntry(i).validBit==1)
 				{
 					SendCount++;
-					toTLB.push_back(pt.AccessEntry(i));
+					fastMem.AddEntrytoTLB(pt.AccessEntry(i));
 				}
 				if (SendCount == 2) { break; }
 			}
@@ -330,7 +478,7 @@ public:
 				if (pt.AccessEntry(i).validBit == 1)
 				{
 					SendCount++;
-					toTLB.push_back(pt.AccessEntry(i));
+					fastMem.AddEntrytoTLB(pt.AccessEntry(i));
 				}
 				if (SendCount == 2) { break; }
 			}
@@ -343,7 +491,7 @@ public:
 				if (pt.AccessEntry(i).validBit == 1)
 				{
 					SendCount++;
-					toTLB.push_back(pt.AccessEntry(i));
+					fastMem.AddEntrytoTLB(pt.AccessEntry(i));
 				}
 				if (SendCount == 2) { break; }
 			}
@@ -356,13 +504,12 @@ public:
 				if (pt.AccessEntry(i).validBit == 1)
 				{
 					SendCount++;
-					toTLB.push_back(pt.AccessEntry(i));
+					fastMem.AddEntrytoTLB(pt.AccessEntry(i));
 				}
 				if (SendCount == 2) { break; }
 			}
 		}
 	  }
-	  return toTLB;
 	}
 	
 	//If Desired Page is not in TLB for reading, it should be checked here:
@@ -390,8 +537,8 @@ public:
 				newVPN.setPgNum(pgNum);
 				FIFO_queue.push(newVPN);
 				//Update its value in page table and mark its VALID BIT=1;
-				Tables[pNum].UpdateFrame(pgNum, nextFreeFrame);
-				Tables[pNum].ValidatePage(pgNum, 1);
+				Tables[pNum-1].UpdateFrame(pgNum, nextFreeFrame);
+				Tables[pNum-1].ValidatePage(pgNum, 1);
 				nextFreeFrame++; freeFrames--;
 			}
 			else     //Means RAM is full
@@ -408,9 +555,9 @@ public:
 						previousPage = frames[i];
 						frames[i] = requiredPage;
 						//update Page Table
-						Tables[pNum].UpdateFrame(pgNum,i);
+						Tables[pNum-1].UpdateFrame(pgNum,i);
 						//Write back to DISK the page to be replaced if it is dirty
-						if (Tables[pNum].AccessEntry(pgNum).DirtyBit == 1)
+						if (Tables[pNum-1].AccessEntry(pgNum).DirtyBit == 1)
 						{
 							//Write back to DISK
 							store.WriteBack(newVPN.processNum,newVPN.pageNum,previousPage);
@@ -418,6 +565,7 @@ public:
 					}
 				}
 			}
+			reqFrmNum = Tables[pNum - 1].AccessEntry(pgNum).FrameNum;
 		}
 		else              //Page Table has the frame Number of desired Page => Page is in RAM
 		{
@@ -425,13 +573,18 @@ public:
 			fastMem.UpdateTLB(pNum, pgNum, ptEntry.FrameNum);
 			//Return the required Frame Number from Page Table
 			reqFrmNum = ptEntry.FrameNum;
-			return reqFrmNum;
 		}
+		return reqFrmNum;
 	}
 
 	//Directly Accessing the RAM frames for READ when you have frame Number/Index
 	PAGE DirectAccessFrameForRead(int frmNum)
 	{
+		if (frmNum < 0 || frmNum >= size)
+		{
+			cout << "INVALID FRAME DETECTED: " << frmNum<<endl;
+			exit(1);
+		}
 		return frames[frmNum];
 	}
 
@@ -441,105 +594,25 @@ public:
 		//Updates the required part of specified Page 
 		frames[frmNum].UpdateValueAtOffset(newVal,pgOffset);
 		//Now mark it dirty in page table
-		Tables[pNum].MarkDirty(pgNum);
+		Tables[pNum-1].MarkDirty(pgNum);
 	}
 };
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-class TLB
-{
-	PTableEntry* quickTable;
-	int TLBSize;
-	PhysicalMemory& RAM;
-	int nextIndex=0;   //Index to the next free entry
-	queue<VirtualAddr> VPN_Track;
-	VirtualAddr newVPN;
+     ///////////////////////////////////////////////////////////////////////       MEMORY_HANDLER       ////////////////////////////////////////////////////////////////////
+	///////////////////////////////////////////////////////////////////////       MEMORY_HANDLER       ////////////////////////////////////////////////////////////////////
 
-public:
-	TLB(int size, PhysicalMemory& mem) :TLBSize(size),RAM(mem)
-	{ quickTable = new PTableEntry[TLBSize];}
-
-	//Initialize TLB with Random Pages
-	void Initialize()
-	{
-		vector<PTableEntry> fromRAM;
-		for (int i = 1; i < 5; i++)
-		{
-			fromRAM=RAM.InitializeTLB(i);
-			for(PTableEntry pt:fromRAM)
-			{
-				quickTable[nextIndex] = pt;
-				newVPN.setPNum(pt.processNum);
-				newVPN.setPgNum(pt.pageNum);
-				VPN_Track.push(newVPN);
-				nextIndex++;
-			}
-	    }
-	}
-	
-	//Check whether TLB is empty
-	bool Is_TLBEmpty() { return nextIndex != TLBSize; }
-
-	int AccessPage(int pNum, int pgNum)
-	{
-		int FrameNumber=-1;
-		for (int i = 0; i < TLBSize; i++)
-		{
-			if (quickTable[i].processNum == pNum)
-			{
-				if(quickTable[i].pageNum==pgNum)
-				{ FrameNumber = quickTable[i].FrameNum; }
-			}
-		}
-		return FrameNumber;
-	}
-	
-
-	//Updates TLB
-	//Only called by RAM and given desired parameters when TLB does not have req. page frame numbers
-	void UpdateTLB(int pNum,int pgNum,int FrmNum)
-	{
-		PTableEntry newEntry{1,0,FrmNum,pNum,pgNum};
-		PTableEntry target;
-		if (Is_TLBEmpty() == true)   //Means TLB has some empty space
-		{
-			quickTable[nextIndex] = newEntry;
-			newVPN.setPNum(newEntry.processNum);
-			newVPN.setPgNum(newEntry.pageNum);
-			VPN_Track.push(newVPN);
-	    }
-		else                        //Means TLB is full
-		{
-			     //---------------->FIFO REPLACEMENT ALGORITHM<---------------------------------
-			newVPN = VPN_Track.front();
-			VPN_Track.pop();
-			//Now we'll find that PTableEntry and replace it with new PTableEntry
-			for (int i = 0; i < TLBSize; i++)
-			{
-				target = quickTable[i];
-				if ((target.processNum == newVPN.processNum) && (target.pageNum == newVPN.pageNum))
-				{
-					quickTable[i] = newEntry;
-				}
-			}			
-		}
-	}
-};
-
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 class MEMORY_HANDLER
 {
-	int VirtualAddress;
 	int processNum;
 	int pageNum;
 	TLB& cache;
 	PhysicalMemory& RAM;
 public:
     //Constructor:
-	MEMORY_HANDLER(int VAddr,TLB& tlb,int pgNum,int pNum, PhysicalMemory& memory)
-		:VirtualAddress(VAddr),cache(tlb),processNum(pNum),pageNum(pgNum),RAM(memory){}
+	MEMORY_HANDLER(TLB& tlb,int pgNum,int pNum, PhysicalMemory& memory)
+		:cache(tlb),processNum(pNum),pageNum(pgNum),RAM(memory){}
 
 	//We want to access the required page to read its specified part
 	//Here ,we are just accessing the required Page
@@ -589,11 +662,235 @@ public:
 	}
 };
 
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    ///////////////////////////////////////////////////////////////////////       CONFIGURATION MANAGER       ////////////////////////////////////////////////////////////////////
+   ///////////////////////////////////////////////////////////////////////       CONFIGURATION MANAGER       ////////////////////////////////////////////////////////////////////
+
+
+class ConfigurationManager
+{
+	json j;
+	int RAM_Size;
+	int Page_Size;
+	int TLB_Size;
+	int Latency_TLB;
+	int Latency_RAM;
+	int Latency_Disk;
+
+public:
+
+	//CONSTRUCTOR
+	//Constructs the Json Map according to Json file given
+	ConfigurationManager(ifstream& Jsonfile)
+	{
+		if (!Jsonfile.is_open())
+		{
+			cout << "ERROR: Could'nt open your Json File\n";
+		}
+		try {
+			Jsonfile >> j;   //Parse the Json file and builds a Hash Map according to Json file
+		}
+		catch (const json::parse_error& ex)
+		{
+			cout << ex.what();
+		}
+		AssignValues();
+	}
+
+	//Assigns and sets the parameters according to Json Map
+	void AssignValues()
+	{
+		RAM_Size = j["RAM_Size"]["value"].get<int>();
+		Page_Size = j["Page_Size"]["value"].get<int>();
+		TLB_Size = j["TLB_Size"]["value"].get<int>();
+		Latency_TLB = j["Latency"]["TLB"]["value"].get<int>();
+		Latency_RAM = j["Latency"]["RAM"]["value"].get<int>();
+		Latency_Disk = j["Latency"]["Disk"]["value"].get<int>();
+	}
+
+	//Display the assigned values
+	void PrintConfig() const {
+		std::cout << "RAM Size: " << RAM_Size << " KB\n";
+		std::cout << "Page Size: " << Page_Size << " KB\n";
+		std::cout << "TLB Size: " << TLB_Size << "\n";
+		std::cout << "Latency (TLB): " << Latency_TLB << " ns\n";
+		std::cout << "Latency (RAM): " << Latency_RAM << " ns\n";
+		std::cout << "Latency (Disk): " << Latency_Disk << " ns\n";
+	}
+
+	//Getters
+	int getRAM_Size() { return RAM_Size; }
+	int getTLB_Size() { return TLB_Size; }
+	
+};
+
+
+    ///////////////////////////////////////////////////////////////////////       ADDRESS GENERATOR        ////////////////////////////////////////////////////////////////////
+   ////////////////////////////////////////////////////////////////////////       ADDRESS GENERATOR       ////////////////////////////////////////////////////////////////////
+
+
+class AddressGenerator {
+public:
+	void createAddressFile(int count) {
+		ofstream outFile("trace.txt");
+
+		for (int i = 0; i < count; i++) {
+			// Generating a random address between 0 and 500
+			unsigned int addr = rand() % 500;
+			// Randomly pick 'R' (Read) or 'W' (Write)
+			char op = (rand() % 2 == 0) ? 'R' : 'W';
+
+			// Write to file in Hex format: e.g., 0x000000FF R
+			outFile << "0x" << std::hex << std::setw(8) << std::setfill('0')
+				<< addr << " " << op << std::endl;
+		}
+		outFile.close();
+		cout << "File 'trace.txt' created with " << count << " addresses." << std::endl;
+	}
+};
+
+
+    ///////////////////////////////////////////////////////////////////////       ADDRESS PARSER        ////////////////////////////////////////////////////////////////////
+	///////////////////////////////////////////////////////////////////////       ADDRESS PARSER        ////////////////////////////////////////////////////////////////////
+
+
+class AddressParser {
+private:
+	vector<VirtualAddr> addressList; // Vector to store the results
+
+public:
+	// This function reads the file and fills the vector
+	vector<VirtualAddr> parseHexFile(std::string filename) {
+		addressList.clear(); // Clear previous data
+
+		ifstream inFile(filename);
+		if (!inFile.is_open()) {
+			cerr << "Error: Could not open file " << filename << std::endl;
+			return addressList;
+		}
+
+		std::string hexStr;
+		char op; // Operation type (R/W) read from file
+
+		while (inFile >> hexStr >> op) {
+			// 1. Convert hex string to integer
+			unsigned int addrValue;
+			stringstream ss;
+			ss << std::hex << hexStr;
+			ss >> addrValue;
+
+			// 2. Extract VPN and Offset using Page Size = 10
+			int vpn = addrValue / 10;
+			int offset = addrValue % 10;
+
+			// 3. Create a VirtualAddr object and push it to the vector
+			// (Note: Since the trace file doesn't store processNum, 
+			// you might set it to a default or handle it separately)
+			VirtualAddr tempAddr;
+			int random = (rand() % 5);
+			if(random==0 || random>4)
+			{
+				tempAddr.setPNum(1);
+			}
+			else
+			{
+				// Defaulting to process 0 for now
+				tempAddr.setPNum(random);
+			}     
+			cout<<"Process Num Parsed is::"<<tempAddr.processNum<<tempAddr.pageNum<<endl;
+			tempAddr.setPgNum(vpn);    // Setting pageNum from VPN
+			tempAddr.pageOffset = offset;
+
+			addressList.push_back(tempAddr);
+		}
+
+		inFile.close();
+		return addressList; // Return the completed vector
+	}
+};
+
+
+    ///////////////////////////////////////////////////////////////////////       MAIN SIMULATOR        ////////////////////////////////////////////////////////////////////
+	///////////////////////////////////////////////////////////////////////       MAIN SIMULATOR        ////////////////////////////////////////////////////////////////////
+
 
 int main()
 {
-	PROCESS p1(4);
-	p1.PrintPages();
+	//VECTOR OF ADDRESSES INITIALIZED
+
+	vector<VirtualAddr> myAddresses;
+	int totalAddr = myAddresses.size();
+	AddressGenerator gen;
+	AddressParser parser;
+	// 1. Generate 14 addresses
+	gen.createAddressFile(14);
+	cout << "-----------------------------------" << std::endl;
+	// 2. Read and Parse them
+	myAddresses = parser.parseHexFile("addresses.txt");
+
+	cout << endl;
+	
+
+
+	//SIZES OF TLB,RAM INITIALIZED FROM FILE
+
+	char buffer[256];
+	if (_getcwd(buffer, sizeof(buffer)) != nullptr) {
+		cout << "Working directory: " << buffer << endl;
+	}
+	else {
+		cout << "Error getting working directory" << endl;
+	}
+	ifstream JsonFile("config.JSON");
+	if (JsonFile.peek() == EOF) {
+		std::cout << "File is empty or not found!\n";
+	}
+	ConfigurationManager Configurator(JsonFile);
+	int RAM_Size = Configurator.getRAM_Size();
+	int TLB_Size = Configurator.getTLB_Size();
+
+
+
+	//INITIAL DECLARATIONS
+
+	DISK ROM;
+	TLB cache(TLB_Size);
+	PhysicalMemory RAM(RAM_Size,ROM,cache);
+	MEMORY_HANDLER* MMU_Unit=NULL;
+
+
+	// DYNAMIC WORKING
+
+	int pNum, pgNum, pgOffset, newVal;
+	PAGE wanted;
+	srand(42);   //Fixed seed for random numbers
+	for (VirtualAddr Addr : myAddresses)
+	{
+		newVal = rand() % 100;
+		pNum = Addr.processNum;
+		pgNum = Addr.pageNum;
+		pgOffset = Addr.pageOffset;
+		MMU_Unit = new MEMORY_HANDLER(cache, pgNum, pNum, RAM);
+		//First access the page for read
+		wanted = MMU_Unit->ReturnPage();
+		cout<<"Process Number:"<<pNum<<" , Page Number:"<<pgNum<<" , Page Offset:"<<pgOffset<<" , Value Before::"
+			<<wanted.AccessValueAtOffset(pgOffset) << endl;
+		//Now write on the page
+		wanted.UpdateValueAtOffset(newVal, pgOffset);
+		//Display the changed result
+		cout << "Process Number:" << pNum << " , Page Number:" << pgNum << " , Page Offset:" << pgOffset << " , Value After::"
+			<< wanted.AccessValueAtOffset(pgOffset) << endl;
+		 delete MMU_Unit; 
+		 MMU_Unit = NULL;
+		 cout << endl;
+	}
+
+
+	FINAL RESULT SHOWING
+	for (int i = 1; i < 5; i++)
+	{
+		ROM.accessProcess(i).PrintPages();
+	}
+	
 	return 0;
 }
